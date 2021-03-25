@@ -908,6 +908,7 @@ int server_keep_server_alive(void *ptr)
         
         for(i=0;i<ctx->num_parallel_connection;i++)
         {
+          //每个cur_node都有num_parallel_connection个connection，每个都有自己的编号
             int cur_connection = cur_node*ctx->num_parallel_connection+i;
             routs[cur_connection] += server_post_receives_message(cur_connection, 2, ctx->rx_depth/2);
         }
@@ -926,6 +927,7 @@ int server_keep_server_alive(void *ptr)
             return 3;
         }
         
+        //ask_num_of_MR_set应该是指CD给每个新join进来的client要求其创建的MR_set个数
         for(i=0;i<ask_number_of_MR_set;i++)
         {
             ret = read(connection_fd, &recv_buf, sizeof(recv_buf));
@@ -935,19 +937,22 @@ int server_keep_server_alive(void *ptr)
                 die("Read remote MR set error");
             }
             //debug_printf("%d %s\n", i, recv_buf);
+            //loop_cache作为一个临时的存储区域，存储刚刚join进来的client的信息
             memcpy(loop_cache.server_information_buffer[i], recv_buf, ret);
         }
         
         debug_printf("Get Connection from %s: %s\n", remoteIP, loop_cache.server_information_buffer[0]);
         
-        
+        //设定server_name为client的ip
         memcpy(loop_cache.server_name, remoteIP, strlen(remoteIP));
+        //将新join进来的client的信息保存到server_reply的client_list里，这个list是数组，下标是cur_node，也就是node编号
         memcpy(&server_reply.client_list[cur_node], &loop_cache, sizeof(struct client_data));
         
         //Send the local connection information to the remote side
         int server_id = 0;
         for(i=0;i<ctx->num_parallel_connection;i++)
         {
+            //cur_connection是每个node底下的其中一个parallel_connection的编号
             int cur_connection = (cur_node*ctx->num_parallel_connection) + i;
             //cur_connection = cur_node + i;
             memset(&my_dest, 0, sizeof(struct pingpong_dest));
@@ -958,6 +963,7 @@ int server_keep_server_alive(void *ptr)
             my_dest.psn = lrand48() & 0xffffff;
             my_dest.node_id = 0;
             gid_to_wire_gid(&my_dest.gid, gid);
+            //这个是当前CD的RDMA信息，通过tcp发送给刚刚join的client
             sprintf(send_buf, "%04x:%04x:%06x:%06x:%s", my_dest.node_id, my_dest.lid, my_dest.qpn,my_dest.psn, gid);
             ret = write(connection_fd, send_buf, sizeof(send_buf));
             if(ret!= sizeof(send_buf)){
@@ -969,13 +975,14 @@ int server_keep_server_alive(void *ptr)
             }
         
             //Transform the msg into correct form. Then, connect with remote MR (modify qp)
-            
+            //这里把刚才由tcp传过来的client的rdma信息由网络字节序转换为主机字节序 
             server_msg_to_pingpong_dest(loop_cache.server_information_buffer[server_id+i], &rem_dest);
             //since 0 is the server_id; loop_cache keep all the information from client sid
             if((cur_connection+1)%ctx->num_parallel_connection == 0)
                 sl = 1;
             else
                 sl = 0;
+            //利用这些rdma信息构建qp
             if (server_connect_ctx(cur_connection, ib_port, my_dest.psn, mtu, sl, &rem_dest)) 
             {
                 fprintf(stderr, "Couldn't connect to remote QP with %d and connection %d\n", cur_node, cur_connection);
@@ -993,14 +1000,17 @@ int server_keep_server_alive(void *ptr)
             }
             for(j=0;j<ctx->num_parallel_connection;j++)
             {
+                //这里是两层循环,source是当前节点的每一个parallel连接，target是比cur_node加入还要早的哪些node的parallel，这里的意思是，我们把这些所有的节点连起来？？？
                 int new_connection_source = cur_node*ctx->num_parallel_connection + j;
                 int new_connection_target = i*ctx->num_parallel_connection+j;
                 //memcpy(ctx->send_msg[new_connection_source]->data.newnode_msg, server_reply.client_list[i].server_information_buffer[new_connection_source], sizeof(LID_SEND_RECV_FORMAT));
                 //server_send_message(new_connection_source, MSG_NODE_JOIN);
                 int connection_id_1 = new_connection_source;//server_get_connection_by_atomic_number(new_connection_source);
                 struct ibv_mr *ret_mr_1;
+                //注册mr
                 ret_mr_1 = server_register_memory_api(connection_id_1, &server_reply.client_list[i].server_information_buffer[new_connection_source], sizeof(LID_SEND_RECV_FORMAT), IBV_ACCESS_LOCAL_WRITE);
                 //debug_printf("send %s to %d via %d\n", server_reply.client_list[i].server_information_buffer[new_connection_source], new_connection_source, connection_id_1);
+                //发送rdma报文,通知有新节点加入MSG_NODE_JOIN
                 server_send_message_sge(connection_id_1, MSG_NODE_JOIN, ret_mr_1, 0, 0);
                 
                 //memcpy(ctx->send_msg[new_connection_target]->data.newnode_msg, server_reply.client_list[cur_node].server_information_buffer[new_connection_target], sizeof(LID_SEND_RECV_FORMAT));
@@ -1010,12 +1020,13 @@ int server_keep_server_alive(void *ptr)
                 struct ibv_mr *ret_mr_2;
                 ret_mr_2 = server_register_memory_api(connection_id_2, &server_reply.client_list[cur_node].server_information_buffer[new_connection_target], sizeof(LID_SEND_RECV_FORMAT), IBV_ACCESS_LOCAL_WRITE);
                 server_send_message_sge(connection_id_2, MSG_NODE_JOIN, ret_mr_2, 0, 0);
+                //运行到这里，所有节点就互联互通了，这里之所以有两次send，一次是发送给source，告诉它target的存在，一次是发送给target，告诉它source的存在。
                 
                 //debug_printf("send %s to %d\n", server_reply.client_list[cur_node].server_information_buffer[new_connection_target], new_connection_target);
                 usleep(1000);
             }
         }
-        
+        //清空状态，为下一个节点的到来做准备 
         memset(&loop_cache, 0, sizeof(struct client_data));
         memset(recv_buf, 0, sizeof LID_SEND_RECV_FORMAT);
         memset(send_buf, 0, sizeof LID_SEND_RECV_FORMAT);
