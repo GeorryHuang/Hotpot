@@ -1197,6 +1197,7 @@ int server_find_qp_id_by_qpnum(uint32_t qp_num)
     }
     return -1;
 }
+//这里function在处理和锁相关的逻辑，目前还没搞明白这里的锁是怎么做的
 int server_lock_handling(void)
 {
     
@@ -1237,6 +1238,7 @@ int server_lock_handling(void)
         pthread_mutex_unlock(&num_lock_mutex);
         for(i=0;i<num_lock;i++)
         {
+          //看起来这是个共享锁，应该是共享给client的？这里使用server_loopback_read的目的是为了通过RDMA获取锁的信息
             server_loopback_read(&ctx->shared_locks_mr[i], &readlock_c_mr);
             pthread_mutex_lock(&fifo_lock_mutex);
             length = fifo_len(ctx->shared_locks_fifo_queue[i]);
@@ -1721,10 +1723,12 @@ int ibapi_init(int ib_port){
     pthread_t               thread_recv_rate;
     recv_rate_sum = 0;
     pthread_mutex_init(&recv_rate_lock, NULL);
+    //这是一个TRACE功能，可以先忽略
     pthread_create(&thread_recv_rate, NULL, (void *)&server_get_recv_rate, NULL);
     #endif
 
     pthread_t               thread_server;
+    //server_keep_server_alive用一个线程进行tcp监听，处理新client的join逻辑，join时收集client的rdma信息，并将这些信息分发给集群的其他client，让他们互联互通
     pthread_create(&thread_server, NULL, (void *)&server_keep_server_alive, &ib_port);
     pthread_t               thread_poll_cq;
     struct ibv_cq *target_cq;
@@ -1732,6 +1736,7 @@ int ibapi_init(int ib_port){
     pthread_create(&thread_poll_cq, NULL, (void *)&server_poll_cq, target_cq);
     
     //Comment-out lock handling
+    //现在作者的Hotpot版本使用的是无锁的实现
     #ifndef NO_LOCK_IMPLEMENTATION
     pthread_t               thread_lock;
     pthread_create(&thread_lock, NULL, (void *)&server_lock_handling, NULL);
@@ -1863,6 +1868,7 @@ int server_loopback_compare_swp(struct client_ibv_mr *remote_mr, struct client_i
 	return 1;
 }
 
+//向remote_mr写入一条IBV_WR_RDMA_READ命令，然后从远端循环读数据到local_mr里
 int server_loopback_read(struct client_ibv_mr *remote_mr, struct client_ibv_mr *local_mr)
 {
 	struct ibv_send_wr wr, *bad_wr = NULL;
