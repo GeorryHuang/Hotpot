@@ -1234,14 +1234,16 @@ int server_lock_handling(void)
     while(1)
     {
         pthread_mutex_lock(&num_lock_mutex);
+        //正在使用的锁的数量
         num_lock = ctx->num_used_lock;
         pthread_mutex_unlock(&num_lock_mutex);
+        //所以这个逻辑是要对这些正在使用的锁的处理
         for(i=0;i<num_lock;i++)
         {
-          //看起来这是个共享锁，应该是共享给client的？这里使用server_loopback_read的目的是为了通过RDMA获取锁的信息
             server_loopback_read(&ctx->shared_locks_mr[i], &readlock_c_mr);
             pthread_mutex_lock(&fifo_lock_mutex);
             length = fifo_len(ctx->shared_locks_fifo_queue[i]);
+            //当lock上锁，并且share_locks队列为0时，给锁解锁。
             if(readlock_num==LOCK_USED&&length==0)
             {
                 pthread_mutex_unlock(&fifo_lock_mutex);
@@ -1251,10 +1253,13 @@ int server_lock_handling(void)
             }
             else if(readlock_num==LOCK_USED&&length>0)
             {
+                //这是在检查bug？
                 if(readlock_num!=LOCK_USED)
                 {
                     printf("Special error %llu\n", shared_locks[i]);
                 }
+
+                //这个fifo到底是消息队列，还是按顺序对锁进行assigned的？:
                 ptr = (struct send_and_reply_format *)fifo_remove(ctx->shared_locks_fifo_queue[i]);
                 pthread_mutex_unlock(&fifo_lock_mutex);
                 if(ptr==NULL)
@@ -1264,8 +1269,8 @@ int server_lock_handling(void)
                         continue;
                 }
                 connection_id = server_get_connection_by_atomic_number(ptr->src_id, HIGH_PRIORITY);
+                //将锁的状态由LOCK_USED->LOCK_ASSIGNED
                 assigned_num=(uint64_t)LOCK_ASSIGNED;
-                
                 ret = server_loopback_compare_swp(&ctx->shared_locks_mr[i], &readlock_c_mr, (uint64_t)readlock_num, assigned_num);
                 if(ret)
                     printf("2-Lock assigned fail in queue %d\n", i);
