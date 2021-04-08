@@ -1322,7 +1322,6 @@ int server_poll_cq(struct ibv_cq *target_cq)
         } while (ne < 1);
         for (i = 0; i < ne; ++i) 
         {
-
             if (wc[i].status != IBV_WC_SUCCESS) {
                 fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
                         ibv_wc_status_str(wc[i].status),
@@ -1330,14 +1329,19 @@ int server_poll_cq(struct ibv_cq *target_cq)
                 die("Failed Status");
                 return 2;
             }
-
+            //IBV_WC_RECV: Send data operation for a WR that was posted to a Receive Queue (of a QP or to an SRQ)
             if ((int) wc[i].opcode == IBV_WC_RECV) 
             {
-                
+                //wr_id: The 64 bits value that was associated with the corresponding Work Request
+                //这个wr_id在发送端是一个地址，因此在这里接收到以后，把这个64bit的内容进行解析,将64bit的地址指向一个结构体
                 struct ibapi_post_receive_intermediate_struct *p_r_i_struct = (struct ibapi_post_receive_intermediate_struct*)wc[i].wr_id;
                 struct ibapi_header *header_addr;
                 char *addr;
                 int type;
+                //这个ibapi_post_receive_intermediate_sturct结构体保存了两个32位的地址，一个是header，一个是msg
+                // wr_id == 64bit address --point to a struct ---> ibapi_post_receive_intermediate_struct
+                // ibapi_post_receive_intermediate_struct has two 32bit pointer, one point to header, another point to msg
+                
                 header_addr = (struct ibapi_header*)p_r_i_struct->header;
                 #ifdef RECEIVE_RATE_TRACE
                 pthread_mutex_lock(&recv_rate_lock);
