@@ -1234,14 +1234,16 @@ int server_lock_handling(void)
     while(1)
     {
         pthread_mutex_lock(&num_lock_mutex);
+        //正在使用的锁的数量
         num_lock = ctx->num_used_lock;
         pthread_mutex_unlock(&num_lock_mutex);
+        //所以这个逻辑是要对这些正在使用的锁的处理
         for(i=0;i<num_lock;i++)
         {
-          //看起来这是个共享锁，应该是共享给client的？这里使用server_loopback_read的目的是为了通过RDMA获取锁的信息
             server_loopback_read(&ctx->shared_locks_mr[i], &readlock_c_mr);
             pthread_mutex_lock(&fifo_lock_mutex);
             length = fifo_len(ctx->shared_locks_fifo_queue[i]);
+            //当lock上锁，并且share_locks队列为0时，给锁解锁。
             if(readlock_num==LOCK_USED&&length==0)
             {
                 pthread_mutex_unlock(&fifo_lock_mutex);
@@ -1251,10 +1253,13 @@ int server_lock_handling(void)
             }
             else if(readlock_num==LOCK_USED&&length>0)
             {
+                //这是在检查bug？
                 if(readlock_num!=LOCK_USED)
                 {
                     printf("Special error %llu\n", shared_locks[i]);
                 }
+
+                //这个fifo到底是消息队列，还是按顺序对锁进行assigned的？:
                 ptr = (struct send_and_reply_format *)fifo_remove(ctx->shared_locks_fifo_queue[i]);
                 pthread_mutex_unlock(&fifo_lock_mutex);
                 if(ptr==NULL)
@@ -1264,8 +1269,8 @@ int server_lock_handling(void)
                         continue;
                 }
                 connection_id = server_get_connection_by_atomic_number(ptr->src_id, HIGH_PRIORITY);
+                //将锁的状态由LOCK_USED->LOCK_ASSIGNED
                 assigned_num=(uint64_t)LOCK_ASSIGNED;
-                
                 ret = server_loopback_compare_swp(&ctx->shared_locks_mr[i], &readlock_c_mr, (uint64_t)readlock_num, assigned_num);
                 if(ret)
                     printf("2-Lock assigned fail in queue %d\n", i);
@@ -1317,7 +1322,6 @@ int server_poll_cq(struct ibv_cq *target_cq)
         } while (ne < 1);
         for (i = 0; i < ne; ++i) 
         {
-
             if (wc[i].status != IBV_WC_SUCCESS) {
                 fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
                         ibv_wc_status_str(wc[i].status),
@@ -1325,7 +1329,7 @@ int server_poll_cq(struct ibv_cq *target_cq)
                 die("Failed Status");
                 return 2;
             }
-
+            //IBV_WC_RECV: Send data operation for a WR that was posted to a Receive Queue (of a QP or to an SRQ)
             if ((int) wc[i].opcode == IBV_WC_RECV) 
             {
                 //wr_id:The 64 bits value that was associated with the corresponding Work Request
@@ -1335,6 +1339,8 @@ int server_poll_cq(struct ibv_cq *target_cq)
                     uintptr_t msg; // 32bit
                   };*/
               //That wr_id is a intermediate value???
+                //wr_id: The 64 bits value that was associated with the corresponding Work Request
+                //这个wr_id在发送端是一个地址，因此在这里接收到以后，把这个64bit的内容进行解析,将64bit的地址指向一个结构体
                 struct ibapi_post_receive_intermediate_struct *p_r_i_struct = (struct ibapi_post_receive_intermediate_struct*)wc[i].wr_id;
                 /*struct ibapi_header{
                   uint32_t        src_id;
@@ -1347,6 +1353,10 @@ int server_poll_cq(struct ibv_cq *target_cq)
                 struct ibapi_header *header_addr;
                 char *addr;
                 int type;
+                //这个ibapi_post_receive_intermediate_sturct结构体保存了两个32位的地址，一个是header，一个是msg
+                // wr_id == 64bit address --point to a struct ---> ibapi_post_receive_intermediate_struct
+                // ibapi_post_receive_intermediate_struct has two 32bit pointer, one point to header, another point to msg
+                
                 header_addr = (struct ibapi_header*)p_r_i_struct->header;
                 #ifdef RECEIVE_RATE_TRACE
                 pthread_mutex_lock(&recv_rate_lock);
