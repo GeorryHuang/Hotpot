@@ -1328,8 +1328,22 @@ int server_poll_cq(struct ibv_cq *target_cq)
 
             if ((int) wc[i].opcode == IBV_WC_RECV) 
             {
-                
+                //wr_id:The 64 bits value that was associated with the corresponding Work Request
+                /*struct ibapi_post_receive_intermediate_struct
+                  {
+                    uintptr_t header;// 32bit
+                    uintptr_t msg; // 32bit
+                  };*/
+              //That wr_id is a intermediate value???
                 struct ibapi_post_receive_intermediate_struct *p_r_i_struct = (struct ibapi_post_receive_intermediate_struct*)wc[i].wr_id;
+                /*struct ibapi_header{
+                  uint32_t        src_id;
+                  uint64_t        inbox_addr;
+                  uint64_t        inbox_semaphore;
+                  uint32_t        length;
+                  int             priority;
+                  int             type;
+                  };*/
                 struct ibapi_header *header_addr;
                 char *addr;
                 int type;
